@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src='AgoraRTCSDK-2.4.0.js'></script>
+    <style type='text/css'>
+        .btn {
+            width: 200px;
+            height: 50px;
+            line-height: 50px;
+            text-align: center;
+            background: lightblue;
+            color: black;
+            display: inline-block;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            margin: 20px;
+        }
+        .agora-live {
+            width: 400px;
+            height: 300px;
+            border: 1px solid black;
+        }
+    </style>
+</head>
+<body>
+    <div class='btn-all'>
+        <div class='btn' onclick='methods.init()'>
+            <span>publish</span>
+        </div>
+        <div class='btn' onclick='methods.leave()'>
+            <span>leave</span>
+        </div>
+        <div class='btn' onclick='methods.toggleMode()'>
+            <span id='live-mode-text' value='ddd'>模式:vp8(点击切换)</span>
+        </div>
+    </div>
+    <div id='live'>
+    </div>
+</body>
+<script type='text/javascript'>
+    const methods = {
+        appId: '79ddae8f26a44d87aa2092e9162c5fa1',
+        channelKey: undefined,
+        channel: '1000',
+        uid: 1,
+        client: null,
+        microphoneId: 0,
+        cameraId: 0,
+        liveStatus: false,
+        mode: 'interop',
+        role: 'teacher',
+        logger(desc, data) {
+            desc = desc || '';
+            data = data || '';
+            console.log({
+                file: 'agoraLive.vue',
+                description: desc,
+                items: {
+                    data
+                }
+            })
+        },
+        toggleMode() {
+            let dom = document.getElementById('live-mode-text');
+            if (dom) {
+                if (this.mode === 'interop') {
+                    dom.innerHTML = '模式:h264(点击切换)';
+                    this.mode = 'h264_interop';
+                }
+                else {
+                    dom.innerHTML = '模式:vp8(点击切换)';
+                    this.mode = 'interop';
+                }
+
+            }
+
+        },
+        checkAgoraSupport() {
+            if(!AgoraRTC.checkSystemRequirements()) {
+                this.logger("browser is not support webRTC");
+                return false;
+            }
+            else {
+                return true;
+            }
+        },
+        getDevices() {
+            function getDevCallback(devices) {
+                this.logger('devices',{
+                    'devices':devices
+                });
+                for (let i = 0; i !== devices.length; ++i) {
+                    let device = devices[i];
+                    if (device.kind === 'audioinput' && this.microphoneId == 0) {
+                        this.microphoneId = device.deviceId;
+                    } else if (device.kind === 'videoinput' && this.cameraId == 0) {
+                        this.cameraId = device.deviceId;
+                    } else {
+                        this.logger('Some other kind of source/device: ', {'device':device});
+                    }
+                }
+            }
+            AgoraRTC.getDevices(getDevCallback.bind(this));
+        },
+        beforeInit() {
+            this.checkAgoraSupport();
+            this.getDevices();
+
+            this.destroyLiveDom();
+            this.createLiveDom();
+        },
+        init() {
+            this.beforeInit();
+            this.logger('AgoraRTC init');
+            this.client = AgoraRTC.createClient({mode: this.mode});
+            this.client.init(this.appId, () => {
+                this.logger('AgoraRTC init successfully',{
+                    'appId': this.appId,
+                    'channel': this.channel,
+                    'channelKey': this.channelKey,
+                    'uid': this.uid,
+                    'role': this.role
+                });
+                this.join();
+            });
+        },
+        join() {
+            this.client.join(this.channelKey, this.channel, this.uid, this.joinSuccess.bind(this), this.joinFailed.bind(this));
+        },
+        joinSuccess(uid) {
+            this.logger("User " + this.uid + " join channel successfully",{channel: this.channel});
+
+            this.localStream = AgoraRTC.createStream({
+                streamID: this.uid,
+                audio: true,
+                cameraId: this.cameraId,
+                microphoneId: this.microphoneId,
+                screen: false,
+                video: true
+            });
+            this.localStream.setVideoProfile('720P');
+            this.localStream.init(this.localStreamInitSuccess.bind(this));
+            if (this.liveStatus) {
+                this.subscribeStream();
+            }
+        },
+        joinFailed() {
+            this.logger(
+                'User ' + this.uid + ' join channel failed',
+                {
+                    channel: this.channel,
+                    args: arguments
+                }
+            );
+            if (arguments[0] == 'ERR_DYNAMIC_KEY_EXPIRED') {
+                let ret = this.client.renewChannelKey(this.channelKey, function() {
+                    console.log({
+                        file: 'agoraLive.vue',
+                        description: 'renewChannelKey successfully',
+                        args: arguments[0]
+                    });
+                }, function() {
+                    console.log({
+                        file: 'agoraLive.vue',
+                        description: 'renewChannelKey failed',
+                        args: arguments[0]
+                    });
+                });
+                this.logger('renewChannelKey return value', ret);
+            }
+        },
+        createLiveDom() {
+            let dom = document.getElementById('live');
+            let node = document.createElement('div')
+            if (node) {
+                node.id = 'agora-live';
+                node.classList.add('agora-live');
+                dom.appendChild(node);
+            }
+        },
+        destroyLiveDom() {
+            let dom = document.getElementById('live');
+            let node = document.getElementById('agora-live');
+            if (dom && node) {
+                dom.removeChild(node);
+            }
+        },
+        localStreamInitSuccess() {
+            this.logger("getUserMedia successfully");
+            this.localStream.play('agora-live');
+            // this.modifyStyle();
+            this.client.publish(this.localStream, function (err) {
+                console.log({
+                    file: 'agrolive.vue',
+                    description: "Publish local stream error",
+                    err: err
+                });
+            });
+            this.client.on('stream-published', function (evt) {
+                console.log({
+                    file: 'agrolive.vue',
+                    description: "Publish local stream successfully"
+                });
+            });
+        },
+        subscribeStream() {
+            this.client.on('stream-added', (evt) => {
+                let stream = evt.stream;
+
+                this.client.subscribe(stream, (err) => {
+                    console.log({
+                        file: 'agoraLive.vue',
+                        description: "Subscribe stream failed",
+                        error: err
+                    });
+                });
+
+                this.client.on("stream-removed", (evt) => {
+                    let stream = evt.stream;
+                    if (stream) {
+                        stream.stop();
+                        console.log({
+                            file: 'agoraLive.vue',
+                            description: "Stream removed: " + evt.stream.getId()
+                        });
+                    }
+                });
+
+                this.client.on('peer-leave', function (evt) {
+                    var stream = evt.stream;
+                    if (stream) {
+                        stream.stop();
+                        console.log(evt.uid + " leaved from this channel");
+                    }
+                });
+            });
+            this.client.on('stream-subscribed', this.subscribeSuccess.bind(this));
+        },
+        subscribeSuccess(evt) {
+            var stream = evt.stream;
+
+            this.logger(
+                "Subscribe remote stream successfully: " + stream.getId(),
+                {args: arguments}
+            );
+
+            this.remoteStream = stream;
+            this.remoteStream.play("agora-audio-live");
+        },
+        modifyStyle() {
+            let dom = document.getElementById('agora-live');
+            if (dom && dom.childNodes[0] && dom.childNodes[0].childNodes[0]) {
+                dom.childNodes[0].childNodes[0].style.left = 0;
+            }
+        },
+        leave() {
+
+            if (this.localStream) {
+                console.log({
+                    file: 'agoraLive.vue',
+                    description: "stream Unpublished"
+                });
+                this.client.unpublish(this.localStream, function (err) {
+                    console.log({
+                        file: 'agoraLive.vue',
+                        description: "Unpublish failed with error",
+                        error: err
+                    });
+                });
+                this.localStream.stop();
+                this.localStream.close();
+            }
+            if (this.remoteStream) {
+                this.client.unsubscribe(this.remoteStream, (val) => {
+                    console.log({
+                        file: 'agoraLive.vue',
+                        description: 'unsubscribe stream failed',
+                        data: val
+                    })
+                });
+            }
+            this.client && this.client.leave(this.leaveSuccess.bind(this), this.leaveFailed.bind(this));
+            this.destroyLiveDom();
+        },
+        leaveSuccess() {
+            this.logger('leave successfully', {channel: this.channel});
+        },
+        leaveFailed() {
+            this.logger('leave failed', {channel: this.channel});
+        }
+    }
+</script>
+</html>
